@@ -75,7 +75,7 @@ class STMScan:
             print(f"Reading {file_path.name}")
             grid = nap.Grid(file_path.as_posix())
             try:
-                a, b = findall(',\s([0-9]*)/([0-9]*),',
+                a, b = findall(r',\s([0-9]*)/([0-9]*),',
                             grid.header['comment'])[0]
             except:
                 raise ValueError(f"Could not find the required information in the file header: {grid.header['comment']}")

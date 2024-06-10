@@ -126,8 +126,10 @@ class STMScan:
     def plot_topography(self, cmap='YlOrBr', ax=None):
         if not ax:
             _, ax = plt.subplots(1, 1)
-        ax.imshow(self.topography, cmap='YlOrBr', extent=[
-                  0, self.dimensions[0]/1e-9, 0, self.dimensions[1]/1e-9])
+        print(self.topography.shape)
+        print(self.dimensions)
+        ax.imshow(self.topography, cmap='YlOrBr'), extent=[
+                  0, self.dimensions[1]/1e-9, 0, self.dimensions[0]/1e-9])
         scalebar = ScaleBar(1, units='nm', dimension="si-length", length_fraction=0.4,
                             location='lower right', box_alpha=0, scale_loc='top')
         ax.add_artist(scalebar)

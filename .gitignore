@@ -164,3 +164,4 @@ cython_debug/
 # VS code
 .vscode/
 *code-workspace*
+*desktop.ini

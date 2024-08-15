@@ -1,16 +1,17 @@
-import numpy as np
-from pathlib import Path
-from typing import Union, Optional, Tuple, List
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-from matplotlib.colors import Normalize
-from sklearn.preprocessing import MinMaxScaler
 import matplotlib.cm as cm
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
 import nanonispy.read as nap
-from matplotlib_scalebar.scalebar import ScaleBar
-from skimage import exposure
+import numpy as np
 import numpy.typing as npt
+from pathlib import Path
 from re import findall
+from scipy.ndimage import zoom
+from skimage import exposure
+from sklearn.preprocessing import MinMaxScaler
+from typing import List, Optional, Tuple, Union
+from matplotlib_scalebar.scalebar import ScaleBar
+
 color_palette = [key for key in mcolors.BASE_COLORS if key != 'w']
 
 class STMScan:
@@ -35,6 +36,35 @@ class STMScan:
         self.dimensions = dimensions
         self.nx, self.ny, self.nE = self.dIdV.shape
         self.metadata = metadata
+
+    def interpolate(self, zoom_factor: float):
+        """
+        Interpolate the data arrays (topography, dIdV, I, etc.)
+        by a given zoom factor.
+
+        Parameters:
+        zoom_factor (float): The factor by which to scale spatial dimensions.
+        """
+
+        # Interpolate dIdV
+        self.dIdV = zoom(self.dIdV, (1, 1, zoom_factor))
+
+        # Interpolate I
+        self.I = zoom(self.I, (1, 1, zoom_factor))
+        self.V = zoom(self.V, (zoom_factor,))
+        # Optional: Interpolate the imaginary part of dIdV, if present
+        if self.dIdV_imaginary is not None:
+            self.dIdV_imaginary = zoom(self.dIdV_imaginary, (1, 1, zoom_factor))
+
+        # Update dimensions after interpolation
+        self.nx, self.ny, self.nE = self.dIdV.shape[:3]
+
+        # Optionally update other relevant metadata based on new dimensions
+        # self.dimensions = (self.dimensions[0] * zoom_factor, self.dimensions[1] * zoom_factor)
+
+        # Log or print to validate the interpolation
+        print(f"Data arrays interpolated with a zoom factor of {zoom_factor}.")
+        
 
     def histogram_equalization(self, clip_limit: float = 0.03) -> np.ndarray:
         self.topography_unit8 = 255 - exposure.equalize_adapthist(
@@ -71,6 +101,7 @@ class STMScan:
     def from_file(cls, file_path: Path | str):
         # check extension if 3ds:
         file_path = Path(file_path)
+
         if file_path.suffix == '.3ds':
             print(f"Reading {file_path.name}")
             grid = nap.Grid(file_path.as_posix())
@@ -98,14 +129,15 @@ class STMScan:
         else:
             print("Functionality of this file has not been implemented")
         # add for other types of files
+        
         return cls(
             topography=topography,
             dIdV=dIdV,
             I=I,
             V=V,
             dimensions=size,
-            metadata=grid.header
-        )
+            metadata= grid.header
+            )
 
     def pixel_to_location(self, matrix: np.ndarray) -> np.ndarray:
         """
@@ -126,7 +158,9 @@ class STMScan:
     def plot_topography(self, cmap='YlOrBr', ax=None):
         if not ax:
             _, ax = plt.subplots(1, 1)
-        ax.imshow(self.topography, cmap='YlOrBr', extent=[
+        print(self.topography.shape)
+        print(self.dimensions)
+        ax.imshow(self.topography, cmap='YlOrBr'), extent=[
                   0, self.dimensions[1]/1e-9, 0, self.dimensions[0]/1e-9])
         scalebar = ScaleBar(1, units='nm', dimension="si-length", length_fraction=0.4,
                             location='lower right', box_alpha=0, scale_loc='top')

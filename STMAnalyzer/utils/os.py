@@ -22,3 +22,24 @@ def check_and_iter(path: Path, file_paths: List = []) -> List:
             check_and_iter(idir, file_paths)
     
     return file_paths
+
+def remove_duplicates(file_paths: List) -> List:
+    """
+    Removes any file that has a duplicate path.stem.
+
+    Parameters:
+    file_paths (List): A list containing the paths to .3ds files.
+
+    Returns:
+    List: A list containing the unique file paths based on path.stem.
+    """
+    seen_stems = set()
+    unique_files = []
+    
+    for file_path in file_paths:
+        stem = file_path.stem
+        if stem not in seen_stems:
+            seen_stems.add(stem)
+            unique_files.append(file_path)
+    
+    return unique_files

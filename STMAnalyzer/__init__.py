@@ -1,1 +1,1 @@
-from . import core, utils, io
+from . import core, utils, io, plot

@@ -9,7 +9,6 @@ from re import findall
 from scipy.ndimage import zoom
 from scipy.interpolate import interp1d
 from skimage import exposure
-from sklearn.preprocessing import MinMaxScaler
 from typing import List, Optional, Tuple, Union
 from matplotlib_scalebar.scalebar import ScaleBar
 import copy 

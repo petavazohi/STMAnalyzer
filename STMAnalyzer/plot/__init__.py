@@ -1,1 +1,1 @@
-from .plot import hit_histogram
+from .plot import hit_histogram, som_didv_topo

@@ -7,6 +7,7 @@ def adjust_dimensions2d(hit_histogram, dimensions: Tuple = None):
     elif dimensions is None:
         print('Dimensions not provided. Guessing ...')
         n = np.sqrt(max(hit_histogram.shape))
+        print(hit_histogram.shape)
         if n.is_integer():
             n = int(n)
             dimensions= (n, n)

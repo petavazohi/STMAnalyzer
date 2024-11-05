@@ -16,7 +16,8 @@ from ..core.scan import STMScan
 
 GRAY = (0.5, 0.5, 0.5)
 
-def hit_histogram(hit_histogram, dimensions: Tuple=None, plot_spectra: bool=True, V=None, som_weights=None):
+def hit_histogram(hit_histogram, dimensions: Tuple=None, plot_spectra: bool=True, V=None, som_weights=None, offset=0.0):
+
     hit_histogram = adjust_dimensions2d(hit_histogram, dimensions)
     dimensions = hit_histogram.shape
     if som_weights is not None and som_weights.ndim !=3:
@@ -105,9 +106,9 @@ def hit_histogram(hit_histogram, dimensions: Tuple=None, plot_spectra: bool=True
     ax0.grid(False)
     if plot_spectra:
         counter = 0
-        for coord in coordinates:
+        for i, coord in enumerate(coordinates):
             # V = V*1e3 #TODO this might need to adjusted.
-            ax1.plot(V, som_weights[coord[0], coord[1]], linewidth=0.75, color=colors[counter])
+            ax1.plot(V, som_weights[coord[0], coord[1]]+i*offset, linewidth=0.75, color=colors[counter])
             counter += 1
         ax1.set_ylim(0,)
         ax1.set_xlim(V[0], V[-1])
@@ -124,9 +125,9 @@ def som_didv_topo(hit_histogram,
                   cluster_index,
                   stm_scan: STMScan,
                   block_size=(1, -1),
-                  offset:bool=True,
                   dimensions: Tuple=None,
-                  colormap: str='Grays'):
+                  colormap: str='Grays',
+                  offset=0.01):
     origin = 'lower'
     hit_histogram = adjust_dimensions2d(hit_histogram, dimensions)
     dimensions = hit_histogram.shape
@@ -219,9 +220,7 @@ def som_didv_topo(hit_histogram,
             for counter, coord in enumerate(coordinates):
                 # V = V*1e3 #TODO this might need to adjusted.
                 ws = som_weights[coord[0], coord[1]]
-                # if offset:
-                #     ws += counter
-                ax1.plot(stm_scan.V, ws, linewidth=0.75, color=colors[counter])
+                ax1.plot(stm_scan.V, ws+offset*counter, linewidth=0.75, color=colors[counter])
             ax1.set_ylim(0,)
             ax1.set_xlim(stm_scan.V[0], stm_scan.V[-1])
             ax1.set_xlabel("Bias (mV)")

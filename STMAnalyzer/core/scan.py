@@ -12,7 +12,7 @@ from skimage import exposure
 from typing import List, Optional, Tuple, Union
 from matplotlib_scalebar.scalebar import ScaleBar
 import copy 
-
+import distinctipy
 
 color_palette = [key for key in mcolors.BASE_COLORS if key != 'w']
 
@@ -324,25 +324,27 @@ class STMScan:
         ax2 = self.plot_topography(ax=ax2)
         points = []
         V = self.V*1e3
+        color_palette = distinctipy.get_colors(n_random)
+        vertical_offset = 0.1
         if locations is None:
             locations = []
-            for x in range(n_random):
+            for i in range(n_random):
                 index1 = np.random.randint(self.nx)
                 index2 = np.random.randint(self.ny)
                 locations.append([index1, index2])
-                ax1.plot(V, self.dIdV[index1, index2, :],
-                         label=f'pixel location: ({index1}, {index2})', linewidth=1.0)
+                ax1.plot(V, self.dIdV[index1, index2, :]+i*vertical_offset,
+                         label=f'pixel location: ({index1}, {index2})', linewidth=1.0, color=color_palette[i])
         else:
-            for x in locations:
+            for i, x in enumerate(locations):
                 index1 = x[0]
                 index2 = x[1]
                 points.append([index1, index2])
-                ax1.plot(V, self.dIdV[index1, index2, :],
-                         label=f'pixel location: ({index1}, {index2})', linewidth=1.0)
+                ax1.plot(V, self.dIdV[index1, index2, :]+i*vertical_offset,
+                         label=f'pixel location: ({index1}, {index2})', linewidth=1.0, color=color_palette[i])
             n_random = len(locations)
         points = self.pixel_to_location(np.array(locations))
-        ax2.scatter(points[:, 0], points[:, 1], color=(
-            color_palette*4)[:n_random], s=16.0)
+        ax2.scatter(points[:, 0], points[:, 1], color=
+            color_palette, s=16.0)
         ax1.axhline(y=0, color='black', linestyle='--', linewidth=1.0)
         ax1.set_xlim(V[0], V[-1])
         ax1.set_xlabel("Bias (mV)")

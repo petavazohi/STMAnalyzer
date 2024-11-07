@@ -1,1 +1,1 @@
-from .plot import hit_histogram, som_didv_topo
+from .plot import plot_hit_histogram, som_didv_topo, som_merge, hist_som_distances

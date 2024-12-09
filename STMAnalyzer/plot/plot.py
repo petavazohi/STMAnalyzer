@@ -7,13 +7,16 @@ import matplotlib.pylab as plt
 import numpy as np
 from typing import Tuple
 from skimage.feature import peak_local_max
+from skimage.transform import resize
 import distinctipy
 from scipy.spatial.distance import euclidean
 from itertools import product
 from matplotlib_scalebar.scalebar import ScaleBar
 import numpy.typing as npt
 from scipy.spatial.distance import pdist, squareform
+from pathlib import Path
 from matplotlib.gridspec import GridSpec
+from scipy.stats import maxwell, kstest
 from ..utils.arrays import adjust_dimensions2d, get_neighbors
 from ..core.scan import STMScan
 
@@ -254,9 +257,9 @@ def som_didv_topo(hit_histogram,
                 idxs = np.where(cluster_index == flat_index)
                 masked[idxs] = colors[counter]
             ax2.imshow(masked, origin=origin, cmap='YlOrBr', extent=[
-                0, stm_scan.dimensions[1]/1e-9, 0, stm_scan.dimensions[0]/1e-9])
+                0, stm_scan.dimensions[1], 0, stm_scan.dimensions[0]])
             ax3.imshow(stm_scan.topography, origin=origin, cmap='YlOrBr', extent=[
-                0, stm_scan.dimensions[1]/1e-9, 0, stm_scan.dimensions[0]/1e-9])
+                0, stm_scan.dimensions[1], 0, stm_scan.dimensions[0]])
 
             scalebar = ScaleBar(1, units='nm', dimension="si-length", length_fraction=0.4,
                                 location='lower right', box_alpha=0, scale_loc='top')
@@ -271,8 +274,50 @@ def som_didv_topo(hit_histogram,
                 plt.clf()
             # plt.show()
 
+from scipy.stats import gamma, rayleigh, planck
 
-def hist_som_distances(som_weights):
+def fit_maxwell_boltzmann(spectra, bins='auto'):
+    """
+    Fit Maxwell-Boltzmann and other distributions to pairwise distances of spectra.
+    
+    Parameters:
+    - spectra (np.ndarray): An array of spectra, typically in the format 
+      (number_of_samples, number_of_features).
+    - bins (int or str): Number or method for computing histogram bins, 
+      similar to the 'bins' parameter of numpy.histogram. The default is 'auto'.
+
+    Returns:
+    None: Displays a plot comparing the empirical histogram of distances to 
+    fitted probability density functions of specified distributions.
+    """
+    
+    flattened_spectra = spectra.reshape(-1, spectra.shape[-1])
+    distances = pdist(flattened_spectra, metric='euclidean')
+    fig, ax = plt.subplots(1, 1, figsize=(9, 6))
+    
+    x = np.linspace(0, distances.max(), 1000)
+    distributions = {
+        'Maxwell-Boltzmann': maxwell,
+        'Gamma' : gamma, 
+        # 'Rayleigh': rayleigh,
+    }
+    params = {}
+    colors = distinctipy.get_colors(len(distributions)+1)
+    ax.hist(distances, bins=bins, density=True, alpha=0.6, color=colors[0], label='Empirical Data')
+    for i, dist in enumerate(distributions):
+        prms = distributions[dist].fit(distances)
+        params[dist] = prms
+        pdf_fitted = distributions[dist].pdf(x, *prms)
+        ax.plot(x, pdf_fitted, lw=2, label=dist, color=colors[i+1])
+    ax.set_xlabel('Distances')
+    ax.set_ylabel('Probability Density')
+    ax.set_ylim(0, )
+    ax.legend()
+    plt.show()
+
+
+def hist_som_distances(som_weights, bins='auto' , plot_thresholds=True, savefig=None):
+    fig, ax = plt.subplots(1,1)
     # Reshape SOM weights to 2D (flatten grid while keeping weight vectors intact)
     flattened_weights = som_weights.reshape(-1, som_weights.shape[-1])
     
@@ -290,25 +335,27 @@ def hist_som_distances(som_weights):
                   'medium': medium_threshold,
                   'loose': loose_threshold}
     # Plot histogram
-    plt.hist(distances, bins=50, alpha=0.75, label="Pairwise Distances")
+    ax.hist(distances, bins=bins, alpha=0.75, label="Pairwise Distances")
     
-    
-    # Add vertical lines for thresholds
-    aggressive_line =plt.axvline(aggressive_threshold, color='red', linestyle='--', linewidth=1, label='Aggressive')
-    medium_line = plt.axvline(medium_threshold, color='orange', linestyle='--', linewidth=1, label='Medium')
-    loose_line = plt.axvline(loose_threshold, color='green', linestyle='--', linewidth=1, label='Loose')
-    
-    # Add text for each threshold value
-    ymin, ymax = plt.ylim()  # Get y-axis limits to position text
-    plt.text(aggressive_threshold, ymax * 0.5, f'{aggressive_threshold:.2f}', color='red', fontsize=10, ha='right', rotation=90)
-    plt.text(medium_threshold, ymax * 0.3, f'{medium_threshold:.2f}', color='orange', fontsize=10, ha='right', rotation=90)
-    plt.text(loose_threshold, ymax * 0.1, f'{loose_threshold:.2f}', color='green', fontsize=10, ha='right', rotation=90)
+    if plot_thresholds:
+        # Add vertical lines for thresholds
+        aggressive_line =plt.axvline(aggressive_threshold, color='red', linestyle='--', linewidth=1, label='Aggressive')
+        medium_line = plt.axvline(medium_threshold, color='orange', linestyle='--', linewidth=1, label='Medium')
+        loose_line = plt.axvline(loose_threshold, color='green', linestyle='--', linewidth=1, label='Loose')
+        
+        # Add text for each threshold value
+        ymin, ymax = plt.ylim()  # Get y-axis limits to position text
+        plt.text(aggressive_threshold, ymax * 0.5, f'{aggressive_threshold:.2f}', color='red', fontsize=10, ha='right', rotation=90)
+        plt.text(medium_threshold, ymax * 0.3, f'{medium_threshold:.2f}', color='orange', fontsize=10, ha='right', rotation=90)
+        plt.text(loose_threshold, ymax * 0.1, f'{loose_threshold:.2f}', color='green', fontsize=10, ha='right', rotation=90)
 
-    plt.xlabel("Pairwise Distance")
-    plt.ylabel("Frequency")
-    plt.title("Histogram of SOM Pairwise Distances")
-    plt.legend()
-    plt.show()
+    ax.set_xlabel("Pairwise Distance")
+    ax.set_ylabel("Frequency")
+    ax.set_title("Histogram of SOM Pairwise Distances")
+    ax.legend()
+    if savefig:
+        modified_savefig = savefig.with_name(savefig.stem + "_hist_som_distances" + savefig.suffix)
+        plt.savefig(modified_savefig)
     
     # Convert to a square form distance matrix
     distance_matrix = squareform(distances)
@@ -340,11 +387,12 @@ def som_merge(hit_histogram,
               num_ax_per_row=4,
               num_spectra_per_ax=5,
               savefig=None):
+    if savefig is not None:
+        savefig = Path(savefig)
     # Determine threshold based on string input
+    distances, distance_matrix, thresholds = hist_som_distances(som_weights, savefig=savefig)
     if isinstance(threshold, str):
-        _, _, thresholds = hist_som_distances(som_weights)
         threshold = thresholds[threshold]
-    
     hit_histogram = adjust_dimensions2d(hit_histogram, dimensions)
     dimensions = hit_histogram.shape
     n, m = dimensions
@@ -384,7 +432,12 @@ def som_merge(hit_histogram,
             # current_hits = hit_histogram[tuple(current)]
             neighbors = get_neighbors(current, grid_type=grid_type, dimension=dimensions)
             
-            neighbors = sorted(neighbors, key=lambda x: hit_histogram[tuple(x)], reverse=True)
+            # neighbors = sorted(neighbors, key=lambda x: hit_histogram[tuple(x)], reverse=True)
+            # Flatten the current node index
+            flat_current = np.ravel_multi_index(current, dimensions)
+
+            # Sort neighbors based on their distance from the current node
+            neighbors = sorted(neighbors, key=lambda x: distance_matrix[flat_current, np.ravel_multi_index(x, dimensions)])
             for neighbor in neighbors:
                 if tuple(neighbor) in visited or hit_histogram[tuple(neighbor)] == 0:
                     continue
@@ -477,14 +530,17 @@ def som_merge(hit_histogram,
     
     total_hits_all_nodes =  np.sum(hit_histogram)
     percentages = {}
-    percentages = {}
     for parent, nodes in merge_dict.items():
         parent_hits = sum([hit_histogram[node] for node in nodes])
         percentages[parent] = 100 * parent_hits / total_hits_all_nodes
 
+
     num_spectra_per_row = num_spectra_per_ax*num_ax_per_row
     n_row = n_spectra//num_spectra_per_row+1
     n_col = num_ax_per_row
+    if savefig is not None:
+        modified_savefig = savefig.with_name(savefig.stem + "_merged_som" + savefig.suffix)
+        plt.savefig(modified_savefig)
     fig, axes = plt.subplots(n_row, n_col , figsize=(10, 5*n_row), sharey=True, sharex=True)
     axes = axes.ravel()
     merge_dict = dict(sorted(merge_dict.items(), 
@@ -524,10 +580,9 @@ def som_merge(hit_histogram,
         if ax.get_subplotspec().is_last_row():
             ax.set_xlabel("Bias (mV)")
     plt.tight_layout()
-    plt.show()
     if savefig is not None:
-        plt.savefig(savefig)
-        plt.clf()
+        modified_savefig = savefig.with_name(savefig.stem + "_percentages_dIdV" + savefig.suffix)
+        plt.savefig(modified_savefig)
     fig, ax1 = plt.subplots(1, 1, figsize=(10, 10))
     # norm = plt.Normalize(vmin=np.min(
     #     stm_scan.topography), vmax=np.max(stm_scan.topography))
@@ -543,7 +598,7 @@ def som_merge(hit_histogram,
             idxs = np.where(cluster_index == flat_index)
             masked[idxs] = group_colors[parent]
     ax1.imshow(masked, cmap='YlOrBr', extent=[
-        0, stm_scan.dimensions[1]/1e-9, 0, stm_scan.dimensions[0]/1e-9])
+        0, stm_scan.dimensions[1], 0, stm_scan.dimensions[0]])
 
     # scalebar = ScaleBar(1, units='nm', dimension="si-length", length_fraction=0.4,
     #                     location='lower right', box_alpha=0, scale_loc='top')
@@ -551,15 +606,16 @@ def som_merge(hit_histogram,
     ax1.set_xticks([])
     ax1.set_yticks([])
     ax1.grid(False)
-    plt.show()
-
-
-    for x in plots:    
+    if savefig is not None:
+        modified_savefig = savefig.with_name(savefig.stem + "_topography_overlay" + savefig.suffix)
+        plt.savefig(modified_savefig)    
+    cluster_index_resized = resize(cluster_index, (stm_scan.topography.shape[0], stm_scan.topography.shape[1]), order=0, anti_aliasing=False, preserve_range=True)
+    for plot_counter, plot in enumerate(plots):
         fig, axes = plt.subplots(1, 2, figsize=(16, 6))
         norm = plt.Normalize(vmin=np.min(
             stm_scan.topography), vmax=np.max(stm_scan.topography))
         masked = colormap(norm(stm_scan.topography))[:, :, :3]
-        for i, (parent, weighted_spectrum) in enumerate(x.items()):
+        for i, (parent, weighted_spectrum) in enumerate(plot.items()):
             percentage_label = f"{percentages[parent]:.1f}%"
             axes[0].plot(V, 
                 weighted_spectrum + i* offset, 
@@ -575,24 +631,21 @@ def som_merge(hit_histogram,
 
             irow, icolumn = parent
             flat_index = np.ravel_multi_index([irow, icolumn], dimensions)
-            idxs = np.where(cluster_index == flat_index)
+            idxs = np.where(cluster_index_resized == flat_index)
+
             masked[idxs] = group_colors[parent]
             for irow, icolumn in merge_dict[parent]:
                 flat_index = np.ravel_multi_index([irow, icolumn], dimensions)
-                idxs = np.where(cluster_index == flat_index)
+                idxs = np.where(cluster_index_resized == flat_index)
                 masked[idxs] = group_colors[parent]
-            axes[1].imshow(masked, cmap='YlOrBr', extent=[
-                0, stm_scan.dimensions[1]/1e-9, 0, stm_scan.dimensions[0]/1e-9])
+            axes[1].imshow(masked, extent=[
+                0, stm_scan.dimensions[1], 0, stm_scan.dimensions[0]])
             axes[1].set_xticks([])
             axes[1].set_yticks([])
             axes[1].grid(False)
-            
-
-    plt.show()
-            
-        
-
+        if savefig is not None:
+            modified_savefig = savefig.with_name(savefig.stem + f"_percentages_dIdV_topography_{plot_counter}" + savefig.suffix)
+            plt.savefig(modified_savefig)
     
-
     return merge_dict
 

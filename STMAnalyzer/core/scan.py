@@ -9,10 +9,12 @@ from re import findall
 from scipy.ndimage import zoom
 from scipy.interpolate import interp1d
 from skimage import exposure
+from skimage.util import invert
 from typing import List, Optional, Tuple, Union
 from matplotlib_scalebar.scalebar import ScaleBar
 import copy 
 import distinctipy
+import matplotlib.ticker as ticker
 
 color_palette = [key for key in mcolors.BASE_COLORS if key != 'w']
 
@@ -23,10 +25,11 @@ class STMScan:
     """
 
     def __init__(self,
-                 topography: npt.ArrayLike,
+                 dIdV_integral : npt.ArrayLike,
                  dIdV: npt.ArrayLike,
                  I: npt.ArrayLike,
                  V: npt.ArrayLike,
+                 topography: npt.ArrayLike = None,
                  dIdV_imaginary: npt.ArrayLike = None,
                  params: npt.ArrayLike = None,
                  dimensions: tuple = None,
@@ -52,6 +55,7 @@ class STMScan:
         self.I = I
         self.V = V
         self.dIdV_imaginary = dIdV_imaginary
+        self.dIdV_integral = dIdV_integral
         self.params = params
         self.dimensions = dimensions
         self.metadata = metadata
@@ -65,6 +69,15 @@ class STMScan:
             if self.dIdV_imaginary is not None:
                 self.dIdV_imaginary = np.flip(self.dIdV_imaginary, axis=2)
             
+    
+    @property
+    def v_range(self):
+        return self.V.max() - self.V.min()
+    
+    @property 
+    def dIdV_range(self):
+        return self.dIdV.max() - self.dIdV.min()
+    
     @property
     def nE(self):
         return self.dIdV.shape[2]
@@ -222,7 +235,7 @@ class STMScan:
         return
 
     @classmethod
-    def from_file(cls, file_path: Path | str):
+    def from_file(cls, sts_path: Path | str, stm_path: Path | str = None):
         """
         Initializes an STMScan object from a file.
 
@@ -232,19 +245,17 @@ class STMScan:
         Returns:
         STMScan: An STMScan object initialized from the file.
         """
-        file_path = Path(file_path)
+        sts_path = Path(sts_path)
 
-        if file_path.suffix == '.3ds':
-            print(f"Reading {file_path.name}")
-            grid = nap.Grid(file_path.as_posix())
+        if sts_path.suffix == '.3ds':
+            print(f"Reading {sts_path.name}")
+            grid = nap.Grid(sts_path.as_posix())
             try:
                 a, b = findall(r',\s([0-9]*)/([0-9]*),',
                                grid.header['comment'])[0]
             except:
                 raise ValueError(f"Could not find the required information in the file header: {grid.header['comment']}")
             divider = float(a)/float(b)
-            if file_path.name == 'GridSpectroscopy-071-07182022001.3ds':
-                divider = 0.1
             size = grid.header['size_xy']
             dIdV_key = [key for key in grid.signals.keys() if 'X' in key][0]
             dIdV = grid.signals[dIdV_key]
@@ -253,37 +264,53 @@ class STMScan:
             print(f'Divider {divider}')
             V *= divider
             # V = grid.signals['sweep_signal']
-            topography = grid.signals['topo']
+            dIdV_integral = grid.signals['topo']
             current_key = [key for key in grid.signals.keys()
                            if "Current" in key][0]
             I = grid.signals[current_key]
-            grid.header['file_path'] = file_path.as_posix()
+            grid.header['file_path'] = sts_path.as_posix()
         else:
             print("Functionality of this file has not been implemented")
         # add for other types of files
+        if stm_path is not None:
+            stm_path = Path(stm_path)
+            stm_scan = nap.Scan(stm_path)
+            z_forward = stm_scan.signals['Z']['forward']
+            topography = z_forward
 
+            # z_forward = exposure.rescale_intensity(z_forward, in_range='image')
+            # topography = exposure.equalize_hist(topography)
+            # topography = invert(topography)
+        else:
+            topography = dIdV_integral #TODO this was added as test, switch it to None
         return cls(
-            topography=topography,
+            dIdV_integral=dIdV_integral,
             dIdV=dIdV,
             I=I,
             V=V,
+            topography=topography,
             dimensions=size,
             metadata=grid.header
         )
 
-    def pixel_to_location(self, matrix: np.ndarray) -> np.ndarray:
+    def _pixel_to_location(self, matrix: np.ndarray) -> np.ndarray:
         """
         Converts pixel coordinates to real-space locations in nanometers.
 
         Parameters:
-        matrix (np.ndarray): A matrix of pixel coordinates.
+        matrix (np.ndarray): A matrix of pixel coordinates, where each row represents [x, y].
 
         Returns:
         np.ndarray: Matrix of locations in real-space (nm).
         """
-        from_range = [0, self.nx]
-        to_range = [0, self.dimensions[0]/1e-9]
-        return (matrix - from_range[0]) * (to_range[1] - to_range[0]) / (from_range[1] - from_range[0]) + to_range[0]
+        assert matrix.shape[1] == 2, "Input matrix must have two columns representing [x, y] pixel coordinates."
+        
+        real_space = np.empty_like(matrix, dtype=float)
+        
+        for i, pixel_count in enumerate([self.nx, self.ny]):
+            real_space[:, i] = (matrix[:, i] * self.dimensions[i]) / pixel_count
+        return real_space
+
 
     def plot_topography(self, cmap='YlOrBr', ax=None):
         """
@@ -300,16 +327,23 @@ class STMScan:
             _, ax = plt.subplots(1, 1)
         
         
-        ax.imshow(self.topography, cmap='YlOrBr', extent=[
-                  0, self.dimensions[1]/1e-9, 0, self.dimensions[0]/1e-9])
-        scalebar = ScaleBar(1, units='nm', dimension="si-length", length_fraction=0.4,
-                            location='lower right', box_alpha=0, scale_loc='top')
+        ax.imshow(self.topography, cmap=cmap, extent=[
+                  0, self.dimensions[1], 0, self.dimensions[0]])
+        scalebar = ScaleBar(1, units='m', dimension="si-length", length_fraction=0.5, pad=0.3, sep=2,
+                            location='lower left', box_alpha=0, scale_loc='top', color='indigo')#, font_properties={'size':'14'})
         ax.add_artist(scalebar)
+        ax.set_aspect(1)
+        # ax.set_xlabel("X Position (nm)")
+        # ax.set_ylabel("Y Position (nm)")
+        # xticks = np.linspace(0, self.dimensions[1] * 1e9, 7)  # 5 ticks for X
+        # yticks = np.linspace(0, self.dimensions[0] * 1e9, 7)  # 5 ticks for Y
+        # ax.set_xticks(xticks)
+        # ax.set_yticks(yticks)
         ax.set_xticks([])
         ax.set_yticks([])
         return ax
 
-    def plot_dIdV(self, n_random=8, locations: list = None):
+    def plot_dIdV(self, n_random=8, locations: list = None, vertical_offset=0.0, cmap='YlOrBr'):
         """
         Plots random or specified pixel locations' dI/dV data and highlights their positions on the topography.
 
@@ -320,36 +354,47 @@ class STMScan:
         Returns:
         list: List of pixel locations plotted.
         """
-        _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
-        ax2 = self.plot_topography(ax=ax2)
+        _, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 3.5))
+        aspect = self.dIdV_range/self.v_range*800
+        # print(aspect, self.nx, self.ny)
+        ax1.set_aspect(aspect)  # Adjust this value for different ratios; 1 means equal aspect ratio
+        ax2 = self.plot_topography(ax=ax2, cmap=cmap, )
         points = []
         V = self.V*1e3
         color_palette = distinctipy.get_colors(n_random)
-        vertical_offset = 0.1
         if locations is None:
-            locations = []
+            locations = np.empty(shape=(n_random, 2), dtype=float)
             for i in range(n_random):
                 index1 = np.random.randint(self.nx)
                 index2 = np.random.randint(self.ny)
-                locations.append([index1, index2])
+                locations[i, :] = [index1, index2]
                 ax1.plot(V, self.dIdV[index1, index2, :]+i*vertical_offset,
-                         label=f'pixel location: ({index1}, {index2})', linewidth=1.0, color=color_palette[i])
+                         label=f'pixel location: ({index1}, {index2})', linewidth=2.0, color=color_palette[i])
+            points = self._pixel_to_location(locations)
         else:
+            points = np.array(locations)
             for i, x in enumerate(locations):
                 index1 = x[0]
                 index2 = x[1]
-                points.append([index1, index2])
                 ax1.plot(V, self.dIdV[index1, index2, :]+i*vertical_offset,
-                         label=f'pixel location: ({index1}, {index2})', linewidth=1.0, color=color_palette[i])
-            n_random = len(locations)
-        points = self.pixel_to_location(np.array(locations))
-        ax2.scatter(points[:, 0], points[:, 1], color=
-            color_palette, s=16.0)
-        ax1.axhline(y=0, color='black', linestyle='--', linewidth=1.0)
+                         label=f'pixel location: ({index1}, {index2})', linewidth=2.0, color=color_palette[i])
+
+        ax2.scatter(points[:, 1], points[:, 0], color=
+            color_palette, s=18.0)
+        # ax1.axhline(y=0, color='black', linestyle='--', linewidth=1.0)
         ax1.set_xlim(V[0], V[-1])
+        ax1.set_ylim(0,)
         ax1.set_xlabel("Bias (mV)")
         ax1.set_ylabel("dI/dV (a.u.)")
-        return locations
+        # Add ticks customization
+        ax1.tick_params(axis='both', which='major', direction='inout')
+        ax1.tick_params(axis='both', which='minor',direction='in')
+        ax1.minorticks_on()  # Enable minor ticks
+        print(points)
+        # Optionally, specify minor tick locations (if needed)
+        # ax1.xaxis.set_minor_locator(ticker.AutoMinorLocator())
+        # ax1.yaxis.set_minor_locator(ticker.AutoMinorLocator())
+        return
 
     def copy(self):
         """

@@ -1,1 +1,1 @@
-from .plot import plot_hit_histogram, som_didv_topo, som_merge, hist_som_distances
+from .plot import plot_hit_histogram, som_didv_topo, som_merge, hist_som_distances, fit_maxwell_boltzmann

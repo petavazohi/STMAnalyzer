@@ -1,2 +1,2 @@
 from .scan import STMScan
-from .som import SelfOrganizingMap
+from .som import Node, SelfOrganizingMap

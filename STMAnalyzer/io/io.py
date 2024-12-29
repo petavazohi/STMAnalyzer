@@ -58,17 +58,29 @@ def read_hdf5(path: Union[Path, str]) -> Dict[str, Any]:
         raise FileNotFoundError(f"No HDF5 file found at {path} with .h5 or .hdf5 extensions")
     # Open the HDF5 file and parse datasets into a structured dictionary
     with h5py.File(output_path, 'r') as rf:
+        attribs = {
+            key:(value[0] if isinstance(value, (list, tuple, np.ndarray)) and len(value) == 1 else value)
+                   for key, value in rf.attrs.items()
+                   }
         for key in rf.keys():
             if isinstance(rf[key], h5py.Group):
-                # Handle nested groups (e.g., /run1/clusterIndex)
+                # Handle nested groups
                 matlab_output[key] = {}
                 for subkey in rf[key].keys():
-                    data = np.squeeze(rf[key][subkey][()])
-                    # Adjust for MATLAB 1-based indexing if subkey is 'clusterIndex'
-                    if subkey == 'clusterIndex':
-                        data = data.astype(int) - 1
-                    matlab_output[key][subkey] = data
+                    data = rf[key][subkey][()]
+                    # Check if the data is a string dataset
+                    if isinstance(data, bytes):
+                        data = data.decode('utf-8')
+                    else:
+                        data = np.squeeze(data)
+                        # Adjust for MATLAB 1-based indexing if subkey is 'clusterIndex'
+                        if subkey == 'clusterIndex':
+                            data = data.astype(int) - 1
+                    matlab_output[key][subkey] = data.T
             elif isinstance(rf[key], h5py.Dataset):
-                # Handle direct datasets (e.g., /weights)
-                data = np.squeeze(rf[key][()])
-    return matlab_output
+                # Handle direct datasets
+                data = rf[key][()]
+                # Check if the data is a string dataset
+                data = np.squeeze(data)
+                matlab_output[key] = data
+    return matlab_output, attribs

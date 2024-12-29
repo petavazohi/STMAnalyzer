@@ -315,7 +315,6 @@ def fit_maxwell_boltzmann(spectra, bins='auto'):
     ax.legend()
     plt.show()
 
-
 def hist_som_distances(som_weights, bins='auto' , plot_thresholds=True, savefig=None):
     fig, ax = plt.subplots(1,1)
     # Reshape SOM weights to 2D (flatten grid while keeping weight vectors intact)
@@ -386,7 +385,9 @@ def som_merge(hit_histogram,
               threshold=0.1,
               num_ax_per_row=4,
               num_spectra_per_ax=5,
-              savefig=None):
+              savefig=None, 
+              sort_by='percentage',
+              plot_average_spectra=False):
     if savefig is not None:
         savefig = Path(savefig)
     # Determine threshold based on string input
@@ -409,7 +410,7 @@ def som_merge(hit_histogram,
     visited = set()
     merged_nodes = set()
     merge_dict = {tuple((i, j)): [tuple((i, j))] for i in range(n) for j in range(m)}
-    
+    #############################################################
     def find_parent(coord):
         """Find the parent node or cluster in merge_dict."""
         for parent, merged_nodes in merge_dict.items():
@@ -423,6 +424,13 @@ def som_merge(hit_histogram,
         coords = merge_dict[parent]  # Use parent to get the cluster
         total_hits = sum(hit_histogram[c] for c in coords)
         return sum(som_weights[c] * hit_histogram[c] for c in coords) / total_hits
+    
+    def average_weight(coord):
+        """Compute the weighted average weight for a given coordinate."""
+        parent = find_parent(coord)
+        coords = merge_dict[parent]  # Use parent to get the cluster
+        return sum(som_weights[c] for c in coords) / len(coords)
+
     
     def merge(coord):
         stack = [coord]
@@ -442,8 +450,11 @@ def som_merge(hit_histogram,
                 if tuple(neighbor) in visited or hit_histogram[tuple(neighbor)] == 0:
                     continue
                 
-                avg_weight_current = weighted_average_weight(current)
-                avg_weight_neighbor = weighted_average_weight(neighbor)
+                # avg_weight_current = weighted_average_weight(current)
+                # avg_weight_neighbor = weighted_average_weight(neighbor)
+                
+                avg_weight_current = average_weight(current)
+                avg_weight_neighbor = average_weight(neighbor)
                 
                 dist = euclidean(avg_weight_current, avg_weight_neighbor)
                 
@@ -457,7 +468,6 @@ def som_merge(hit_histogram,
                         merged_nodes.update(merge_dict[parent_current])
                         
                         merge_dict[parent_current].extend(merge_dict.pop(parent_neighbor))
-
                     stack.append(neighbor)
 
     for coord in coordinates:
@@ -512,6 +522,7 @@ def som_merge(hit_histogram,
                                                  facecolor=color)
                     patch_list.append(hex)
                     text_list.append([x, y, int(hit_histogram[irow, icolumn]), color])
+                    # text_list.append([x, y, f"({irow}, {icolumn})", color])
                     break
 
     p = PatchCollection(patch_list, match_original=True)
@@ -527,7 +538,7 @@ def som_merge(hit_histogram,
     ax0.set_xticks([])
     ax0.set_yticks([])
     ax0.grid(False)
-    
+    ###############################################################
     total_hits_all_nodes =  np.sum(hit_histogram)
     percentages = {}
     for parent, nodes in merge_dict.items():
@@ -541,36 +552,77 @@ def som_merge(hit_histogram,
     if savefig is not None:
         modified_savefig = savefig.with_name(savefig.stem + "_merged_som" + savefig.suffix)
         plt.savefig(modified_savefig)
+    ################################################################
     fig, axes = plt.subplots(n_row, n_col , figsize=(10, 5*n_row), sharey=True, sharex=True)
     axes = axes.ravel()
+    # get_percentage = lambda item: sum(hit_histogram[node] for node in item[1])
+    # get_gap = lambda  
+
+    def get_delta_E(coordinate):
+        idxs = np.where(average_weight(coordinate) < epsilon)[0]
+        if len(idxs) > 0:  # Check for valid indices
+            delta_E = stm_scan.V[idxs[-1]] - stm_scan.V[idxs[0]]
+            return delta_E
+        return float('inf')  # Return a large value if no valid delta_E
+
+    epsilon = 0.01
+    sort_functions = {
+        'percentage': lambda item: sum(hit_histogram[node] for node in item[1]),
+        # 'gap': lambda item: len(np.where(weighted_average_weight(item[0])<epsilon)[0]),
+        # 'gap': lambda item: np.average(np.where(average_weight(item[0])<epsilon)[0]),
+        'gap': lambda item: get_delta_E(item[0]),
+        'distance': lambda item: euclidean(average_weight(item[0]), average_weight(list(merge_dict.keys())[0])),
+    }
+    
     merge_dict = dict(sorted(merge_dict.items(), 
-                            key=lambda item: sum(hit_histogram[node] for node in item[1]), 
+                            key=sort_functions["percentage"], 
+                            reverse=False))
+    
+    
+    merge_dict = dict(sorted(merge_dict.items(), 
+                            key=sort_functions[sort_by], 
                             reverse=True))
+
     num_spectra_per_ax = n_spectra//len(axes)
     V = stm_scan.V*1e3
     plots = [{} for x in range(len(axes))]
     for i, (parent, nodes) in enumerate(merge_dict.items()):
         # Use the weighted_average_weight function to compute the cluster's spectrum
-        weighted_spectrum = weighted_average_weight(parent)
+        # weighted_spectrum = weighted_average_weight(parent)
+        weighted_spectrum = average_weight(parent)
+
         # Plot the weighted spectrum using the parent cluster's color
         idx = i//num_spectra_per_ax
         percentage_label = f"{percentages[parent]:.1f}%"
-
-
+        
         if idx >= n_row*n_col:
             idx=-1
-        axes[idx].plot(V, 
-                   weighted_spectrum + (i % num_spectra_per_ax) * offset, 
-                   linewidth=0.75, 
-                   color=group_colors[parent],
-                   label=f'{percentage_label}')
-        plots[idx][parent]=weighted_spectrum
+        if plot_average_spectra:
+            axes[idx].plot(V, 
+                    weighted_spectrum + (i % num_spectra_per_ax) * offset, 
+                    linewidth=2.0, 
+                    color=group_colors[parent],
+                    label=percentage_label)
+            plots[idx][parent]=weighted_spectrum
+        else:
+            labels = [percentage_label] + ['']*len(nodes)
+            plots[idx][parent]=[]
+            for j, node in enumerate(nodes):
+                axes[idx].plot(V,
+                            som_weights[node]+ (i % num_spectra_per_ax) * offset,
+                            color=group_colors[parent], 
+                            label=labels[j], 
+                            linewidth=1.0)
+                plots[idx][parent].append(som_weights[node])
+        axes[idx].axhline(y=epsilon, color='gray', linestyle='--', linewidth=1.0)
+
         # midpoint = len(stm_scan.V) // 2
 
         # axes[idx].text(stm_scan.V[midpoint], 
         #            weighted_spectrum[midpoint] + (i % num_spectra_per_ax) * offset,
         #            f'{percentage_label}', fontsize=8, color=group_colors[parent])
     for ax in axes:
+        
         ax.legend(fontsize=8, loc='upper center')
         ax.axhline(y=0, color='black', linestyle='--', linewidth=1.0)
         ax.set_xlim(V[0], V[-1])
@@ -583,6 +635,7 @@ def som_merge(hit_histogram,
     if savefig is not None:
         modified_savefig = savefig.with_name(savefig.stem + "_percentages_dIdV" + savefig.suffix)
         plt.savefig(modified_savefig)
+    ################################################################################
     fig, ax1 = plt.subplots(1, 1, figsize=(10, 10))
     # norm = plt.Normalize(vmin=np.min(
     #     stm_scan.topography), vmax=np.max(stm_scan.topography))
@@ -615,14 +668,23 @@ def som_merge(hit_histogram,
         norm = plt.Normalize(vmin=np.min(
             stm_scan.topography), vmax=np.max(stm_scan.topography))
         masked = colormap(norm(stm_scan.topography))[:, :, :3]
-        for i, (parent, weighted_spectrum) in enumerate(plot.items()):
+        for i, (parent, spectra) in enumerate(plot.items()):
             percentage_label = f"{percentages[parent]:.1f}%"
-            axes[0].plot(V, 
-                weighted_spectrum + i* offset, 
-                linewidth=0.75, 
-                color=group_colors[parent],
-                label=f'{percentage_label}')
-            
+            if plot_average_spectra:
+                axes[0].plot(V, 
+                    spectra + i* offset, 
+                    linewidth=2.0, 
+                    color=group_colors[parent],
+                    label=f'{percentage_label}')
+                # axes[0].axhline(y=epsilon, color='gray', linestyle='--', linewidth=1.0)
+            else:
+                labels = [percentage_label] + ['']*len(spectra)
+                for j, som_weight in enumerate(spectra):
+                    axes[0].plot(V, 
+                        som_weight + i* offset, 
+                        linewidth=1.0, 
+                        color=group_colors[parent],
+                        label=labels[j])
             axes[0].legend(fontsize=8, loc='upper center')
             axes[0].axhline(y=0, color='black', linestyle='--', linewidth=1.0)
             axes[0].set_xlim(V[0], V[-1])

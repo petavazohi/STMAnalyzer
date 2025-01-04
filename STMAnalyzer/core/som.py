@@ -6,10 +6,12 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from scipy.spatial import distance # import distance.pdist, distance.squareform, distance.euclidean
 import warnings
-# from .. import io
-# from .. import utils
-import STMAnalyzer.io as io
-import STMAnalyzer.utils as utils
+import distinctipy
+from .. import io
+from .. import utils
+
+# import STMAnalyzer.io as io
+# import STMAnalyzer.utils as utils
 
 class Node:
     def __init__(self, weight: np.ndarray, grid_index: Union[Tuple, List], topology: str = "hexagonal") -> None:
@@ -34,7 +36,7 @@ class Node:
         elif self.topology == "rectangular":
             self.separation_factor = 1.93
         self.radius = self.separation_factor / (4 * np.cos(np.pi / self.n_polygon_vertices)) if self.n_polygon_vertices else None
-        self.color = None
+        self.color: np.ndarray = None
 
     def _get_polygon_vertices(self) -> Union[int, None]:
         """
@@ -63,7 +65,7 @@ class Node:
         Tuple
             The (x, y) position of the node in the grid.
         """
-        x, y = self.grid_index[0], self.grid_index[1]
+        x, y = self.grid_index
         if self.topology == "hexagonal":
             y *= self.separation_factor/2
             if self.grid_index[1] % 2 != 0:
@@ -155,9 +157,10 @@ class SelfOrganizingMap:
         self.distance_metric: str = self._validate_distance_metric(distance_metric)
         self.dimensions: Tuple[int, int] = dimensions
         # Create and store nodes
-        self.nodes: List[List[Node]] = [
-            [Node(weight=self.weights[i, j], grid_index=(i, j), topology=self.topology) for j in range(dimensions[1])]
+        self.nodes: List[Node] = [
+            Node(weight=self.weights[i, j], grid_index=(i, j), topology=self.topology)
             for i in range(dimensions[0])
+            for j in range(dimensions[1])
         ]
 
         # Validate the dimensions of the weights
@@ -168,6 +171,18 @@ class SelfOrganizingMap:
         self.distance_matrix: np.ndarray = distance.squareform(self.distances)
         self.merge_dict: Dict[Tuple[int, int], List[Tuple[int, int]]] = None
         self._calculate_u_matrix()
+
+    def __iter__(self):
+        """
+        Iterate over all nodes in the container.
+
+        Yields
+        ------
+        Node
+            Each node in the container.
+        """
+        for node in self.nodes:
+            yield node
 
     def _validate_topology(self, topology: str) -> str:
         """
@@ -236,15 +251,14 @@ class SelfOrganizingMap:
         """
         u_matrix = np.zeros(self.dimensions)
 
-        for i in range(self.dimensions[0]):
-            for j in range(self.dimensions[1]):
-                neighbors = self.get_neighbors((i, j))
-                if neighbors:
-                    distances = [self.get_weight_distance((i, j), neighbor) for neighbor in neighbors]
-                    u_matrix[i, j] = np.mean(distances)
-                else:
-                    u_matrix[i, j] = 0  # No neighbors
-        self.u_matrix = (u_matrix - u_matrix.min()) / (u_matrix.max() - u_matrix.min())
+        for i, j in np.ndindex(self.dimensions):
+            neighbors = self.get_neighbors((i, j))
+            if neighbors:
+                distances = [self.get_weight_distance((i, j), neighbor) for neighbor in neighbors]
+                u_matrix[i, j] = np.mean(distances)
+            else:
+                u_matrix[i, j] = 0  # No neighbors
+        self.u_matrix = u_matrix
         return
 
     def create_grid(self, ax: plt.Axes = None, patch_shape: Union[str, None] = "polygon", linestyle: str = "-",
@@ -285,22 +299,19 @@ class SelfOrganizingMap:
             fig, ax = plt.subplots(1, 1, figsize=(self.dimensions[0], self.dimensions[1]))
         else:
             fig = ax.get_figure()
-        patches = []
-        for i in range(self.dimensions[0]):
-            patches.append([])
-            for j in range(self.dimensions[1]):
-                if patch_shape is not None:
-                    node = self[i, j]
-                    patch = node.create_patch(
-                        shape=patch_shape,
-                        linestyle=linestyle,
-                        linewidth=linewidth,
-                        hatch=hatch,
-                        alpha=alpha,
-                        facecolor=node.color,
-                    )
-                    ax.add_patch(patch)
-                    patches[-1].append(patch)
+        patches = [[[] for _ in range(self.dimensions[1])] for _ in range(self.dimensions[0])]
+        for node in self:
+            if patch_shape is not None:
+                i, j = node.grid_index
+                patch = node.create_patch(
+                    shape=patch_shape,
+                    linestyle=linestyle,
+                    linewidth=linewidth,
+                    hatch=hatch,
+                    alpha=alpha
+                )
+                ax.add_patch(patch)
+                patches[i][j] = patch
 
         if self.topology == "hexagonal":
             ax.set_xlim(-1, self.dimensions[0] + 0.5)
@@ -313,49 +324,48 @@ class SelfOrganizingMap:
         ax.axis("off")
         return patches, ax
 
-    def assign_color(self, method: str, colormap: str = 'viridis') -> np.ndarray:
-        if method in ['u_matrix', 'umatrix', 'u-matrix']:
-            cmap = plt.get_cmap(colormap)
-            color_matrix = cmap(self.u_matrix)
-            for i in range(self.dimensions[0]):
-                for j in range(self.dimensions[1]):
-                    self[i, j].color = color_matrix[i, j]
-        elif 'merg' in method:
-            if self.merge_nodes is None:
-                self.merge_nodes()
-            n_spectra = len(self.merge_dict)
-            colors = utils.arrays.generate_colors_with_yellow_last(n_spectra)
-            color_matrix = np.zeros((self.dimensions[0], self.dimensions[1], 3))
-            for i, (_, value) in enumerate(self.merge_dict.items()):
-                for v in value:
-                    color_matrix[v[0], v[1]] = colors[i]
-                    self[v[0], v[1]].color = colors[i]
-        return color_matrix
-
     def color_patches(self,
                       ax: plt.Axes = None,
                       patches: List[List[mpl.patches.Patch]] = None,
                       color: Union[str, tuple, np.ndarray, None] = None,
-                      colormap: str = None) -> plt.Axes:
+                      colormap: str = 'viridis', **kwargs) -> plt.Axes:
         if ax is None:
             fig, ax = plt.subplots(1, 1, figsize=(self.dimensions[0], self.dimensions[1]))
         else:
             fig = ax.get_figure()
         if patches is None:
             patches, _ = self.create_grid(ax=ax)
-        if isinstance(color, str):
-            color_matrix = self.assign_color(method=color, colormap=colormap)
+
+        if isinstance(color, str) and color in ['u_matrix', 'umatrix', 'u-matrix']:
+            cmap = plt.get_cmap(colormap)
+            u_matrix = self.u_matrix
+            u_matrix = (u_matrix - u_matrix.min()) / (u_matrix.max() - u_matrix.min())
+            color_matrix = cmap(u_matrix)
+        elif isinstance(color, str) and 'merg' in color.lower():
+            if self.merge_dict is None:
+                if 'threshold' in kwargs:
+                    threshold = kwargs['threshold']
+                else:
+                    threshold = 'loose'
+                self.merge_nodes(threshold=threshold)
+            n_spectra = len(self.merge_dict)
+            colors = utils.arrays.generate_colors_with_yellow_last(n_spectra)
+            color_matrix = np.zeros((self.dimensions[0], self.dimensions[1], 3))
+            for k, (_, value) in enumerate(self.merge_dict.items()):
+                for i, j in value:
+                    color_matrix[i, j] = colors[k]
         elif isinstance(color, np.ndarray) and color.shape in [self.dimensions + (3,), self.dimensions + (4,)]:
             color_matrix = color
         elif isinstance(color, (tuple, list)):
             color_matrix = np.tile(color, (self.dimensions[0], self.dimensions[1], 1))
         else:
             color_matrix = np.zeros((self.dimensions[0], self.dimensions[1], 4))
-        for i in range(self.dimensions[0]):
-            for j in range(self.dimensions[1]):
-                patch = patches[i][j]
-                node_color = color_matrix[i, j]
-                patch.set_facecolor(node_color)
+        for node in self:
+            i, j = node.grid_index
+            patch = patches[i][j]
+            node_color = color_matrix[i, j]
+            patch.set_facecolor(node_color)
+            node.color = node_color
         node = self[0, 0]
         if self.topology == "hexagonal":
             ax.set_xlim(-1, self.dimensions[0] + 0.5)
@@ -367,10 +377,8 @@ class SelfOrganizingMap:
         ax.set_aspect('equal')
         ax.axis("off")
         if isinstance(color, str) and color.lower() in ["u_matrix", "umatrix", "u-matrix"]:
-            print("Adding colorbar")
             cbar_ax = fig.add_axes([0.89, 0.15, 0.03, 0.7])
             norm = mpl.colors.Normalize(vmin=self.u_matrix.min(), vmax=self.u_matrix.max())
-            # Create the colorbar without ScalarMappable
             mpl.colorbar.ColorbarBase(cbar_ax, cmap=plt.get_cmap(colormap), norm=norm)
         return ax
 
@@ -391,19 +399,21 @@ class SelfOrganizingMap:
         global_min = np.min(self.weights)
         global_range = global_max - global_min
     
-        for i in range(self.dimensions[0]):
-            for j in range(self.dimensions[1]):
-                node = self.nodes[i][j]
-                x, y = node.get_position()
-                weights = node.weight
-                radius = node.radius * 0.9
-                half_box_size = (radius / np.sqrt(2)) if self.topology == "rectangular" else radius*0.92
-                # half_box_size = radius*0.95
-                if global_range > 0:
-                    weights = (weights - global_min) / global_range * (half_box_size) - half_box_size/1.5
-                x_spectrum = np.linspace(-half_box_size, half_box_size, len(weights))
-                ax.plot(x + x_spectrum, y + weights, color='black')
-                # ax.axhline(y=y- half_box_size/1.5, xmin=x - half_box_size, xmax=x + half_box_size, color='black', linestyle='--')
+        for node in self:
+            x, y = node.get_position()
+            weights = node.weight
+            radius = node.radius * 0.9
+            half_box_size = (radius / np.sqrt(2)) if self.topology == "rectangular" else radius*0.92
+            # half_box_size = radius*0.95
+            if global_range > 0:
+                weights = (weights - global_min) / global_range * (half_box_size) - half_box_size/1.5
+            x_spectrum = np.linspace(-half_box_size, half_box_size, len(weights))
+            if node.color is not None:
+                color = distinctipy.get_text_color(node.color)
+            else:
+                color = 'black'
+            ax.plot(x + x_spectrum, y + weights, color=color)
+            # ax.axhline(y=y- half_box_size/1.5, xmin=x - half_box_size, xmax=x + half_box_size, color='black', linestyle='--')
                 
 
         if self.topology == "hexagonal":
@@ -417,17 +427,56 @@ class SelfOrganizingMap:
         ax.axis("off") 
         return ax
 
+    def plot_weights(self,
+                     indices: Union[List[Tuple[int, int]], str] = None,
+                     offset: float = 0.0,
+                     ax: plt.Axes = None,
+                     linewidth: float = None,
+                     savefig: Union[str, None] = None,
+                     x_values: np.ndarray | List = None) -> plt.Axes:
+        
+        if ax is None:
+            fig, ax = plt.subplots(1, 1)
+        if indices is None:
+            indices = np.ndindex(self.dimensions)
+        elif isinstance(indices, str) and 'merg' in indices.lower():
+            if self.merge_dict is None:
+                self.merge_nodes()
+            indices = self.merge_dict.keys() 
+        if x_values is None:
+            ax.set_xticklabels([])
+            x_values = np.arange(self.weights.shape[2])
+        else:
+            x_values = np.array(x_values)
+        for k, (i, j) in enumerate(indices):
+            node = self[i, j]
+            weights = node.weight
+            ax.plot(x_values,
+                    weights+k*offset,
+                    linewidth=linewidth,
+                    color=node.color)
+        ax.set_xlim(x_values.min(), x_values.max())
+        ax.set_ylim(0,)
+        ax.set_xlabel("Bias (mV)")
+        ax.set_ylabel("dI/dV (a.u.)")
+        ax.tick_params(axis='both', which='major', direction='inout')
+        ax.tick_params(axis='both', which='minor',direction='in')
+        ax.minorticks_on()  # Enable minor ticks
+        if savefig:
+            ax.figure.savefig(savefig)
+        return ax
+
     def merge_nodes(self,
                     threshold: float = None,
                     start_coordinates: List[Union[List, np.ndarray]] = [[0, 0]]) -> None:
         n, m = self.dimensions
         visited = set()
         merged_nodes = set()
-        merge_dict = {tuple((i, j)): [tuple((i, j))] for i in range(n) for j in range(m)}
+        merge_dict = {node.grid_index: [node.grid_index] for node in self}
         if threshold is None:
             threshold = 'loose'
         if isinstance(threshold, str):
-            thresholds, _, _ = self.get_thresholds(plot_histogram=False)
+            thresholds, _, _ = self.get_thresholds(plot_histogram=True)
             threshold = thresholds[threshold]
         def find_parent(coordinate):
             """Find the parent node or cluster in merge_dict."""
@@ -467,14 +516,12 @@ class SelfOrganizingMap:
             if tuple(coordinate) not in visited:
                 merge(coordinate)
                 
-        for i in range(n):
-            for j in range(m):
-                coordinate = (i, j)
-                if coordinate not in visited and coordinate not in merged_nodes:
-                    merge([i, j])
+        for i, j in np.ndindex(self.dimensions):
+            coordinate = (i, j)
+            if coordinate not in visited and coordinate not in merged_nodes:
+                merge([i, j])
         self.merge_dict = merge_dict
         return merge_dict
-
 
     def get_neighbors(self, coordinate: Tuple[int, int]) -> List[Tuple[int, int]]:
         """
@@ -550,17 +597,19 @@ class SelfOrganizingMap:
             The matplotlib Axes object where the text annotations will be added.
         """
         shift = {'upper':+1, 'center':0, 'lower':-1}[location]
-        for i in range(self.dimensions[0]):
-            for j in range(self.dimensions[1]):
-                node =self.nodes[i][j]
-                x, y = node.get_position()
-                num_hits = hit_histogram[i, j]
-                radius = node.radius * 0.9
-                
-                half_box_size = (radius / np.sqrt(2)) if self.topology == "rectangular" else radius*0.92
-
-                txt_size = max(5, 20 - max(self.dimensions) // 2)
-                ax.text(x, y+shift*half_box_size/2, str(num_hits), ha='center', va='center', size=txt_size, color='black')
+        # fig_width, fig_height = ax.figure.get_size_inches()
+        # avg_dim = (self.dimensions[0] + self.dimensions[1]) / 2
+        # txt_size = max(5, min(15, int(0.4 * min(fig_width, fig_height) / avg_dim * 10)))
+        radius = self[0, 0].radius * 0.9
+        half_box_size = (radius / np.sqrt(2)) if self.topology == "rectangular" else radius*0.92
+        for node in self:
+            x, y = node.get_position()
+            num_hits = hit_histogram[node.grid_index]
+            if node.color is not None:
+                text_color = distinctipy.get_text_color(node.color)
+            else:
+                text_color = 'black'
+            ax.text(x, y+shift*half_box_size/2, str(num_hits), ha='center', va='center', color=text_color)
 
     def get_weight_distance(self, index1: Tuple[int, int], index2: Tuple[int, int]) -> float:
         """
@@ -617,10 +666,10 @@ class SelfOrganizingMap:
     def get_thresholds(self,
                        plot_histogram=True,
                        savefig=None):    
-        mean_distance = np.mean(self.distances)
+        mean_distance = np.mean(self.distances)#       ) np.mean(self.distances)
         std_distance = np.std(self.distances)
 
-        aggressive_threshold = mean_distance - 0 * std_distance  # Aggressive
+        aggressive_threshold = mean_distance - 0.0 * std_distance  # Aggressive
         medium_threshold = mean_distance - 0.5 * std_distance       # Medium
         loose_threshold = mean_distance - 1.0 * std_distance        # Loose
         thresholds = {
@@ -665,7 +714,9 @@ class SelfOrganizingMap:
         Node
             The node at the specified index.
         """
-        return self.nodes[index[0]][index[1]]
+        flat_index = np.ravel_multi_index(index, self.dimensions)
+        return self.nodes[flat_index]
+
 
     def __setitem__(self, index: Tuple[int, int], value: Node) -> None:
         """
@@ -678,11 +729,12 @@ class SelfOrganizingMap:
         value : Node
             The new node to set at the index.
         """
-        self.nodes[index[0]][index[1]] = value
+        flat_index = np.ravel_multi_index(index, self.dimensions)
+        self.nodes[flat_index] = value
 
     @property
     def shape(self) -> Tuple[int, int]:
-        return (len(self.nodes), len(self.nodes[0]))
+        return self.dimensions
     
     @classmethod
     def from_hdf5(cls, path: Union[Path, str], dimensions: Tuple[int, int] = None, topology: str = 'hexagonal', distance_metric: str = 'euclidean') -> 'SelfOrganizingMap':
@@ -754,97 +806,99 @@ class SelfOrganizingMap:
         print(f"  Dimensions: {dimensions}")
         return cls(weights=weights, topology=topology, dimensions=dimensions, distance_metric=distance_metric, metadata=attribs)        
 
+class SOMDataMapper:
+    def __init__(self,
+                 som: SelfOrganizingMap,
+                 data: np.ndarray) -> None:
+        self.som = som
+        self.data = data
+        
+        if self.data.shape[-1] != self.som.weights.shape[-1]:
+            raise ValueError(
+                "The dimension of the input data does not match the dimension of the SOM weights."
+                )
+        
+        self.flattened_data = self.data.reshape(-1, self.data.shape[-1])
+        self.flattened_weights = self.som.weights.reshape(-1, self.som.weights.shape[-1])
+        self.distances = distance.cdist(self.flattened_data,
+                                        self.flattened_weights,
+                                        metric=som.distance_metric)
+        self.cluster_index = self.get_best_matching_unit()
+        self.hit_histogram = self._generate_hit_histogram()
+        
+    @property
+    def cluster_index_2d(self):
+        return self.cluster_index.reshape(self.data.shape[:-1])
     
-if __name__ == "__main__":
+    def get_best_matching_unit(self, output_dim: int = 1, index_dim: int = 1, order: int = 1,) -> np.ndarray:
+        """
+        Get the best matching unit (BMU) for each data point.
 
-    # # Initialize the Self-Organizing Map
-    # som = SelfOrganizingMap(weights=np.random.rand(*dimensions, 3), topology='hex', dimensions=dimensions)
-
-    # # # Test weight distance
-    # # index1 = (2, 1)
-    # # index2 = (2, 1)
-    # # distance = som.get_weight_distance(index1, index2)
-    # # print(f"Distance between {index1} and {index2}: {distance}")
+        Returns
+        -------
+        np.ndarray
+            An array of BMU indices for each data point.
+        """
+        bmus_flat = self.distances.argsort(axis=1)[:, order - 1]
+        if index_dim == 2:
+            bmus = np.array([np.unravel_index(bmu, self.som.shape) for bmu in bmus_flat])
+        else:
+            bmus = bmus_flat
+        if output_dim == 2:
+            bmus = bmus.reshape(self.data.shape[:-1] + (2,) if index_dim == 2 else self.data.shape[:-1])
+        return bmus
     
-    # # # Plot distance histogram
-    # # ax= som.plot_distance_histogram()
-
-    # hit_histogram = np.random.randint(0, 100, dimensions)
-    # fig, ax = plt.subplots(figsize=(10, 10))
-    # som.create_grid(ax=ax)
-    # som.overlay_hit_histogram(hit_histogram, ax=ax)
-    # plt.show()
-
-    # som = SelfOrganizingMap(weights=np.random.rand(*dimensions, 3), topology='rect', dimensions=dimensions, metadata={})
-
-    # som[2, 3].patch.set_facecolor('orange')
-    # som[4, 5].patch.set_edgecolor('blue')
-    # som[4, 5].patch.set_linewidth(3)
-    # som[6, 7].radius = 0.4
-    # som[8, 2].patch.orientation = np.pi / 6
-    # som[5, 5].patch.set_linestyle('--')
-    # som[3, 4].patch.set_linewidth(2)
-    # som[9, 9].patch.set_hatch('x')
-
-    # central_node = (np.random.randint(dimensions[0]), np.random.randint(dimensions[1]))
-    # som[central_node].patch.set_facecolor('red')
-
-    # hit_histogram = np.random.randint(0, 100, dimensions)
-    # fig, ax = plt.subplots(figsize=(10, 10))
-    # som.create_grid(ax=ax)
-    # som.overlay_hit_histogram(hit_histogram, ax=ax)
+    def _generate_hit_histogram(self):
+        """
+        Generate the hit histogram for the SOM.
+        
+        Returns
+        -------
+        np.ndarray
+            An array of the same shape as the SOM grid, where each element represents
+            the number of data points mapped to the corresponding node.
+        """
+        hit_histogram = np.zeros(self.som.shape, dtype=int)
+        bmus = self.get_best_matching_unit(index_dim=2)
+        
+        for bmu in bmus:
+            hit_histogram[tuple(bmu)] += 1
+        return hit_histogram
     
-    # plt.show()
-    path = Path('.')
-    # dimensions = (6, 12)
-    # path = path.resolve() /'tests'/f'output{dimensions[0]}x{dimensions[1]}.hdf5'
-    # path = Path(r"G:\My Drive\_projects\ML-STS\Matlab\20241227-FeSeTe_paper-7x10-hextop-0Ep-dist-covStp10000-iniNei10\output.hdf5")
-    # path = Path(r"G:\My Drive\_projects\ML-STS\Matlab\20241226-FeSeTe_paper-4x4-hextop-0Ep-dist-covStp300-iniNei3\output.hdf5")
-    path = Path(r"G:\My Drive\_projects\ML-STS\Matlab\20241227-FeSeTe_paper-6x12-hextop-0Ep-dist-covStp5000-iniNei10\output.hdf5")
-    # path = Path(r"G:\My Drive\_projects\ML-STS\Matlab\20241227-FeSeTe_paper-14x20-hextop-0Ep-dist-covStp5000-iniNei7\output.hdf5")
-    # path = Path(r"G:\My Drive\_projects\ML-STS\Matlab\20241227-FeSeTe_paper-8x25-hextop-0Ep-dist-covStp5000-iniNei8\output.hdf5")
-    dimensions = None
-    # cmap='YlOrBr'
-    # cmap='afmhot'
-    # cmap='hot'
-    # cmap='autumn'
-    # cmap='hsv'
-    # cmap='cool'
-    # cmap='cividis'
-    cmap='viridis'
-    # cmap='inferno'
-    # cmap='Greys'
-    topology = 'hexagonal'
-    hit_location = 'upper'
+    def plot_cluster_map(self,
+                         colormap: str ='viridis',
+                         ax: plt.Axes = None) -> plt.Axes:
+        if self.data.ndim != 3:
+            raise ValueError("The input data must be a 3D array. With the last dimension being the number of features.")
+        if ax is None:
+            fig_size = np.array(self.data.shape[:-1])/20
+            fig, ax = plt.subplots(1, 1, figsize=fig_size)
+        
+        # norm = mpl.colors.Normalize(vmin=self.cluster_index.min(), vmax=self.cluster_index.max())
+        
+        ax.imshow(self.cluster_index_2d, cmap=colormap)
+        # plt.colorbar(mpl.cm.ScalarMappable(cmap=colormap), ax=ax)
+        plt.tight_layout()
+        ax.xaxis.set_ticks([])
+        ax.yaxis.set_ticks([])
+        return ax
     
-    som = SelfOrganizingMap.from_hdf5(path, topology=topology, dimensions=dimensions)
-    matlab_output, _ = io.read_hdf5(path)
-    sts_name = 'GridSpectroscopy_103_06222022001'
-    hit_histogram = matlab_output[sts_name]['hitHistogram'].reshape(som.dimensions).astype(int)
-    som.merge_nodes(threshold='loose')
-    patches, ax = som.create_grid(patch_shape='hexagon', linewidth=0.5, alpha=0.5)
-    som.color_patches(ax=ax, patches=patches, )
-    som.overlay_hit_histogram(hit_histogram, location=hit_location, ax=ax)
-    som.plot_weights_on_grid(ax = ax)
-    plt.show()
-    
-    # som = SelfOrganizingMap.from_hdf5(path, topology=topology)
-    # colors = np.zeros(som.dimensions + (3,))
-    # colors[8, 5, :] = [1, 0, 0]
-    # colors[6, 0, :] = [0, 1, 0]
-    # colors[0, 3 ,:] = [0, 0, 1]
-
-    # som.plot_distance_histogram()
-    
-    patches, ax = som.create_grid(patch_shape='hexagon', linewidth=0.5, alpha=0.5)
-    color_matrix = som.assign_color('u-matrix')
-    som.color_patches(ax=ax, patches=patches, color=color_matrix)
-    som.overlay_hit_histogram(hit_histogram, location=hit_location, ax=ax)
-    som.plot_weights_on_grid(ax = ax)
-    plt.show()
-
-    # som = SelfOrganizingMap.from_hdf5(path, topology=topology)
-    # ax = som.create_grid(patch_shape='circle', linewidth=0.5, alpha=0.5, color='u_matrix', colormap=cmap)
-    # som.overlay_hit_histogram(hit_histogram, location=hit_location, ax=ax)
-    # som.plot_weights_on_grid(ax = ax)
-    # plt.show()
+    def plot_cluster_map_and_som(self,
+                                 colormap: str ='viridis',
+                                 overlay_hit_histogram: bool = True,
+                                 plot_weights_on_grid: bool = True,
+                                 axes: Tuple[plt.Axes, plt.Axes] = None) -> plt.Axes:
+        if axes is None:
+            fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+        
+        norm = mpl.colors.Normalize(vmin=0, vmax=self.som.shape[0] * self.som.shape[1])
+        cm = mpl.cm.get_cmap(colormap)
+        color_matrix = cm(norm(np.arange(self.som.shape[0] * self.som.shape[1])).reshape(self.som.shape[0], self.som.shape[1]))
+        patches, _ = self.som.create_grid(patch_shape='hexagon', ax=axes[0])
+        self.som.color_patches(patches=patches, color=color_matrix, ax=axes[0])
+        if overlay_hit_histogram:
+            self.som.overlay_hit_histogram(self.hit_histogram, ax=axes[0], location='upper')
+        if plot_weights_on_grid:
+            self.som.plot_weights_on_grid(ax=axes[0])
+        self.plot_cluster_map(ax=axes[1], colormap=colormap)
+        return axes

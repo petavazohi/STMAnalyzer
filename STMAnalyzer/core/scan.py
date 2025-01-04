@@ -354,7 +354,9 @@ class STMScan:
         Returns:
         list: List of pixel locations plotted.
         """
-        _, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 3.5))
+        # fig_size = (self.nx/10*2, self.ny/10)
+        fig_size = (self.nx/25*2, self.ny/25)
+        _, (ax1, ax2) = plt.subplots(1, 2, figsize=fig_size)
         aspect = self.dIdV_range/self.v_range*800
         # print(aspect, self.nx, self.ny)
         ax1.set_aspect(aspect)  # Adjust this value for different ratios; 1 means equal aspect ratio
@@ -378,7 +380,6 @@ class STMScan:
                 index2 = x[1]
                 ax1.plot(V, self.dIdV[index1, index2, :]+i*vertical_offset,
                          label=f'pixel location: ({index1}, {index2})', linewidth=2.0, color=color_palette[i])
-
         ax2.scatter(points[:, 1], points[:, 0], color=
             color_palette, s=18.0)
         # ax1.axhline(y=0, color='black', linestyle='--', linewidth=1.0)
@@ -390,11 +391,11 @@ class STMScan:
         ax1.tick_params(axis='both', which='major', direction='inout')
         ax1.tick_params(axis='both', which='minor',direction='in')
         ax1.minorticks_on()  # Enable minor ticks
-        print(points)
+        plt.tight_layout()
         # Optionally, specify minor tick locations (if needed)
         # ax1.xaxis.set_minor_locator(ticker.AutoMinorLocator())
         # ax1.yaxis.set_minor_locator(ticker.AutoMinorLocator())
-        return
+        return points
 
     def copy(self):
         """

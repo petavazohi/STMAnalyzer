@@ -1,18 +1,11 @@
 import numpy as np
 from typing import Tuple
-import distinctipy
 
-def generate_colors_with_yellow_last(n_spectra):
-    # Generate initial n_spectra colors
-    colors = distinctipy.get_colors(n_spectra)
-    
-    # Check if yellow is in the list
-    if (1.0, 1.0, 0.0) in colors:
-        # Remove yellow from its current position
-        colors.remove((1.0, 1.0, 0.0))
-        # Append yellow as the last color
-        colors.append((1.0, 1.0, 0.0))
-    return colors
+def normalize_array(arr):
+    arr_min = np.min(arr)
+    arr_max = np.max(arr)
+    norm_arr = (arr - arr_min) / (arr_max - arr_min) if arr_max != arr_min else np.zeros_like(arr)
+    return norm_arr 
 
 def adjust_dimensions2d(hit_histogram, dimensions: Tuple = None):
     if hit_histogram.ndim == 2: 
